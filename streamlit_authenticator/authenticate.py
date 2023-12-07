@@ -3,12 +3,40 @@ import bcrypt
 import streamlit as st
 from datetime import datetime, timedelta
 import extra_streamlit_components as stx
+from deta import Deta
+import streamlit_authenticator as stauth
 
 from .hasher import Hasher
 from .validator import Validator
 from .utils import generate_random_pw
 
-from .exceptions import CredentialsError, ForgotError, RegisterError, ResetError, UpdateError
+from .exceptions import CredentialsError, ForgotError, RegisterError, ResetError
+
+DETA_KEY = 'c0muatoohew_2puQbCrqcp2JZM1KNVroV3D2gZ46v7pz'
+
+deta = Deta(DETA_KEY)
+
+db = deta.Base('Web_application')
+
+def insert_user(email, username, password):
+    """
+    Inserts Users into the DB
+    :param email:
+    :param username:
+    :param password:
+    :return User Upon successful Creation:
+    """
+    date_joined = str(datetime.now())
+
+    return db.put({'key': email, 'username': username, 'password': password, 'date_joined': date_joined})
+
+def fetch_users():
+    """
+    Fetch Users
+    :return Dictionary of Users:
+    """
+    users = db.fetch()
+    return users.items
 
 class Authenticate:
     """
@@ -136,7 +164,7 @@ class Authenticate:
             try:
                 if self._check_pw():
                     if inplace:
-                        st.session_state['name'] = self.credentials['usernames'][self.username]['name']
+                        st.session_state['email'] = self.credentials['usernames'][self.username]['email']
                         self.exp_date = self._set_exp_date()
                         self.token = self._token_encode()
                         self.cookie_manager.set(self.cookie_name, self.token,
@@ -188,9 +216,9 @@ class Authenticate:
                     login_form = st.sidebar.form('Login')
 
                 login_form.subheader(form_name)
-                self.username = login_form.text_input('Username').lower()
+                self.username = login_form.text_input('Username',placeholder='Enter Your Username').lower()
                 st.session_state['username'] = self.username
-                self.password = login_form.text_input('Password', type='password')
+                self.password = login_form.text_input('Password', placeholder='Enter Your Password', type='password')
 
                 if login_form.form_submit_button('Login'):
                     self._check_credentials()
@@ -257,23 +285,27 @@ class Authenticate:
         """
         if location not in ['main', 'sidebar']:
             raise ValueError("Location must be one of 'main' or 'sidebar'")
+    
         if location == 'main':
             reset_password_form = st.form('Reset password')
         elif location == 'sidebar':
             reset_password_form = st.sidebar.form('Reset password')
-        
+    
         reset_password_form.subheader(form_name)
         self.username = username.lower()
-        self.password = reset_password_form.text_input('Current password', type='password')
-        new_password = reset_password_form.text_input('New password', type='password')
-        new_password_repeat = reset_password_form.text_input('Repeat password', type='password')
-
+        self.password = reset_password_form.text_input('Current password', placeholder='Enter Your Password', type='password')
+        new_password = reset_password_form.text_input('New password', placeholder='Enter Your Password', type='password')
+        new_password_repeat = reset_password_form.text_input('Repeat password', placeholder='Confirm Your Password', type='password')
+    
         if reset_password_form.form_submit_button('Reset'):
             if self._check_credentials(inplace=False):
                 if len(new_password) > 0:
                     if new_password == new_password_repeat:
-                        if self.password != new_password: 
-                            self._update_password(self.username, new_password)
+                        if self.password != new_password:
+                            hashed_password = stauth.Hasher([new_password]).generate()[0]
+                            # Update password in both credentials and Deta database
+                            self.credentials['usernames'][self.username]['password'] = hashed_password
+                            db.update({'password': hashed_password}, self.credentials['usernames'][self.username]['email'])
                             return True
                         else:
                             raise ResetError('New and current passwords are the same')
@@ -282,7 +314,8 @@ class Authenticate:
                 else:
                     raise ResetError('No new password provided')
             else:
-                raise CredentialsError('password')
+                raise CredentialsError
+        return False
     
     def _register_credentials(self, username: str, name: str, password: str, email: str, preauthorization: bool):
         """
@@ -343,11 +376,11 @@ class Authenticate:
             register_user_form = st.sidebar.form('Register user')
 
         register_user_form.subheader(form_name)
-        new_email = register_user_form.text_input('Email')
-        new_username = register_user_form.text_input('Username').lower()
-        new_name = register_user_form.text_input('Name')
-        new_password = register_user_form.text_input('Password', type='password')
-        new_password_repeat = register_user_form.text_input('Repeat password', type='password')
+        new_email = register_user_form.text_input('Email', placeholder='Enter Your Email')
+        new_username = register_user_form.text_input('Username', placeholder='Enter Your Username').lower()
+        new_name = register_user_form.text_input('Name', placeholder='Enter Your Nname')
+        new_password = register_user_form.text_input('Password', placeholder='Enter Your Password', type='password')
+        new_password_repeat = register_user_form.text_input('Repeat password', placeholder='Confirm Your Password', type='password')
 
         if register_user_form.form_submit_button('Register'):
             if len(new_email) and len(new_username) and len(new_name) and len(new_password) > 0:
@@ -413,12 +446,16 @@ class Authenticate:
             forgot_password_form = st.sidebar.form('Forgot password')
 
         forgot_password_form.subheader(form_name)
-        username = forgot_password_form.text_input('Username').lower()
+        username = forgot_password_form.text_input('Username', placeholder='Enter Your Username').lower()
 
         if forgot_password_form.form_submit_button('Submit'):
             if len(username) > 0:
                 if username in self.credentials['usernames']:
-                    return username, self.credentials['usernames'][username]['email'], self._set_random_password(username)
+                    new_password = self._set_random_password(username)
+                    # Update password in both credentials and Deta database
+                    hashed_password = stauth.Hasher([new_password]).generate()
+                    db.update({'password': hashed_password[0]}, self.credentials['usernames'][username]['email'])
+                    return username, self.credentials['usernames'][username]['email'], new_password
                 else:
                     return False, None, None
             else:
@@ -464,77 +501,86 @@ class Authenticate:
         """
         if location not in ['main', 'sidebar']:
             raise ValueError("Location must be one of 'main' or 'sidebar'")
+    
         if location == 'main':
             forgot_username_form = st.form('Forgot username')
         elif location == 'sidebar':
             forgot_username_form = st.sidebar.form('Forgot username')
-
+    
         forgot_username_form.subheader(form_name)
-        email = forgot_username_form.text_input('Email')
-
+        email = forgot_username_form.text_input('Email', placeholder='Enter Your Email')
+    
         if forgot_username_form.form_submit_button('Submit'):
             if len(email) > 0:
-                return self._get_username('email', email), email
+                # Directly fetch user data from the database using the email
+                user_data = db.get(email)
+                if user_data:
+                    return user_data['username'], email
+                else:
+                    raise ForgotError('Email not found or username does not exist.')
             else:
-                raise ForgotError('Email not provided')
-        return None, email
-
-    def _update_entry(self, username: str, key: str, value: str):
-        """
-        Updates credentials dictionary with user's updated entry.
-
-        Parameters
-        ----------
-        username: str
-            The username of the user to update the entry for.
-        key: str
-            The updated entry key i.e. "email".
-        value: str
-            The updated entry value i.e. "jsmith@gmail.com".
-        """
-        self.credentials['usernames'][username][key] = value
+                raise ForgotError('Email not provided.')
+    
+        return None, None
 
     def update_user_details(self, username: str, form_name: str, location: str='main') -> bool:
         """
-        Creates a update user details widget.
-
+        Updates user email or username details directly with a form.
+    
         Parameters
         ----------
         username: str
-            The username of the user to update user details for.
+            The current username of the user to update user details for.
         form_name: str
             The rendered name of the update user details form.
         location: str
             The location of the update user details form i.e. main or sidebar.
         Returns
         -------
-        str
-            The status of updating user details.
+        bool
+            True if update is successful, False otherwise.
         """
         if location not in ['main', 'sidebar']:
             raise ValueError("Location must be one of 'main' or 'sidebar'")
+    
         if location == 'main':
             update_user_details_form = st.form('Update user details')
         elif location == 'sidebar':
             update_user_details_form = st.sidebar.form('Update user details')
-        
+    
         update_user_details_form.subheader(form_name)
-        self.username = username.lower()
-        field = update_user_details_form.selectbox('Field', ['Name', 'Email']).lower()
-        new_value = update_user_details_form.text_input('New value')
-
+        self.current_username = username.lower()
+    
+        # Display current username and email
+        current_email = self.credentials['usernames'][self.current_username]['email']
+        update_user_details_form.write(f"Current username: {self.current_username}")
+        update_user_details_form.write(f"Current email: {current_email}")
+    
+        new_email = update_user_details_form.text_input('New Email', placeholder='Enter your new email')
+        new_username = update_user_details_form.text_input('New Username', placeholder='Enter your new username')
+    
         if update_user_details_form.form_submit_button('Update'):
-            if len(new_value) > 0:
-                if new_value != self.credentials['usernames'][self.username][field]:
-                    self._update_entry(self.username, field, new_value)
-                    if field == 'name':
-                            st.session_state['name'] = new_value
-                            self.exp_date = self._set_exp_date()
-                            self.token = self._token_encode()
-                            self.cookie_manager.set(self.cookie_name, self.token,
-                            expires_at=datetime.now() + timedelta(days=self.cookie_expiry_days))
-                    return True
-                else:
-                    raise UpdateError('New and current values are the same')
-            if len(new_value) == 0:
-                raise UpdateError('New value not provided')
+            updated = False
+    
+            # Update Email
+            if len(new_email) > 0 and new_email != current_email:
+                # Insert new record with new email and delete old record
+                user_data = self.credentials['usernames'][self.current_username]
+                user_data['email'] = new_email
+                insert_user(new_email, self.current_username, user_data['password'])
+                db.delete(current_email)
+                self.credentials['usernames'][self.current_username]['email'] = new_email
+                updated = True
+                st.success('Email updated successfully')
+    
+            # Update Username
+            if len(new_username) > 0 and new_username.lower() != self.current_username:
+                user_data = self.credentials['usernames'].pop(self.current_username)
+                user_data['username'] = new_username.lower()
+                self.credentials['usernames'][new_username.lower()] = user_data
+                db.update({'username': new_username.lower()}, user_data['email'])
+                updated = True
+                st.success('Username updated successfully')
+    
+            return updated
+        return False
