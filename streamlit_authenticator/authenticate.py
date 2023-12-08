@@ -12,10 +12,8 @@ from .utils import generate_random_pw
 
 from .exceptions import CredentialsError, ForgotError, RegisterError, ResetError
 
-DETA_KEY = 'c0muatoohew_2puQbCrqcp2JZM1KNVroV3D2gZ46v7pz'
-
+DETA_KEY = st.secrets["deta_key"]
 deta = Deta(DETA_KEY)
-
 db = deta.Base('Web_application')
 
 def insert_user(email, username, password):
