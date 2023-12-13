@@ -237,14 +237,14 @@ class Authenticate:
         if location not in ['main', 'sidebar']:
             raise ValueError("Location must be one of 'main' or 'sidebar'")
         if location == 'main':
-            if st.button(button_name, key):
+            if st.button(button_name,key,use_container_width = True,type='primary'):
                 self.cookie_manager.delete(self.cookie_name)
                 st.session_state['logout'] = True
                 st.session_state['name'] = None
                 st.session_state['username'] = None
                 st.session_state['authentication_status'] = None
         elif location == 'sidebar':
-            if st.sidebar.button(button_name, key):
+            if st.sidebar.button(button_name, key,use_container_width = True,type='primary'):
                 self.cookie_manager.delete(self.cookie_name)
                 st.session_state['logout'] = True
                 st.session_state['name'] = None
